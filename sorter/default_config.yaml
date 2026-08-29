@@ -1,0 +1,51 @@
+# Default file-sorter configuration.
+# Copy this file (see `file-sorter init-config`) and edit it to customize
+# category mappings, ignore rules, and routing behavior.
+
+categories:
+  Images:
+    extensions: [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".heic", ".heif", ".tiff", ".ico"]
+  Documents:
+    extensions: [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".md", ".csv", ".xls", ".xlsx", ".ppt", ".pptx", ".epub"]
+  Videos:
+    extensions: [".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv", ".m4v"]
+  Audio:
+    extensions: [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma"]
+  Archives:
+    extensions: [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"]
+  Installers:
+    extensions: [".exe", ".msi", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".apk"]
+  Code:
+    extensions: [".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".c", ".cpp", ".h", ".hpp", ".json", ".html", ".css", ".sh", ".go", ".rs", ".yaml", ".yml", ".sql"]
+
+# Fallback bucket for files that match none of the categories above (by
+# extension or MIME-type sniffing). Set to null/omit to leave unmatched
+# files in place instead of moving them.
+fallback_category: "Other"
+
+# Files matching any of these are never touched by the scanner.
+ignore:
+  # Extensions typically used by browsers/download managers for in-progress
+  # downloads, plus common junk files.
+  extensions: [".crdownload", ".part", ".download", ".tmp", ".partial", ".ini", ".db"]
+  filenames: [".DS_Store", "desktop.ini", "Thumbs.db", ".sorter_history"]
+  # Skip dotfiles / hidden files entirely.
+  hidden: true
+
+# Route files within a category into date-based subfolders, e.g.
+# Documents/2026/08/report.pdf instead of Documents/report.pdf.
+# `format` uses strftime directives and is applied to the file's last
+# modified time. Set `categories` to a non-empty list to restrict date
+# routing to specific categories; leave it empty to apply to all of them.
+date_routing:
+  enabled: false
+  format: "%Y/%m"
+  categories: []
+
+# How to resolve a filename collision at the destination:
+#   - if duplicate_check is true, the source and existing destination file
+#     are hashed (SHA-256); identical content is treated as a duplicate and
+#     the move is skipped (the source is left in place, nothing is deleted).
+#   - if the content differs (or duplicate_check is false), the destination
+#     filename is auto-incremented, e.g. "report (1).pdf".
+duplicate_check: true
