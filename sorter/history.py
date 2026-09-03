@@ -158,13 +158,40 @@ def latest_run_id(history_dir: Path) -> Optional[str]:
 class UndoRecord:
     src: str  # original location, i.e. where the file will be restored to
     dst: str  # location it currently occupies (the moved-to path)
-    status: str  # "restored", "skipped_missing", "skipped_conflict", "error", "dry_run"
+    status: str  # "restored", "skipped_missing", "skipped_conflict", "error", "dry_run", "rejected_outside_target"
     detail: Optional[str] = None
+
+
+def _escapes_target(path: Path, target_resolved: Path) -> bool:
+    """True if `path` does not resolve to somewhere inside `target_resolved`.
+
+    Both the ledger (`<run_id>.json`) and the crash-safety journal
+    (`<run_id>.jsonl`, see `load_journal`) feed `undo_run` through the same
+    `ledger.records` list, so checking here — at the single point where a
+    record's src/dst are about to be trusted — covers both sources with one
+    check instead of two.
+
+    `resolve()` follows symlinks/junctions. That is a deliberate choice, not
+    an oversight: containment has to be judged on where a path *actually*
+    lands on disk, not on the literal string. Using `absolute()` (which does
+    not follow links) would let a record pass this check merely by pointing
+    at a symlink planted inside `target` whose real target is outside it —
+    exactly the kind of indirection a tampered ledger would use. Resolving
+    is the stricter, safer read of "inside target."
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        # A path component that can't be resolved (e.g. permissions) is
+        # treated as escaping — fail closed, not open.
+        return True
+    return not (resolved == target_resolved or target_resolved in resolved.parents)
 
 
 def undo_run(history_dir: Path, run_id: str, execute: bool) -> list[UndoRecord]:
     ledger = load_ledger(history_dir, run_id)
     results: list[UndoRecord] = []
+    target_resolved = Path(ledger.target).resolve()
 
     # Reverse order so that if multiple files ended up interdependent in
     # naming (unlikely, but cheap to guard), we unwind most-recent-first.
@@ -175,6 +202,26 @@ def undo_run(history_dir: Path, run_id: str, execute: bool) -> list[UndoRecord]:
 
         moved_to = Path(record.dst)
         original = Path(record.src)
+
+        # Reject anything a tampered ledger/journal points outside the run's
+        # own recorded target *before* touching the filesystem at all — this
+        # is the single point of use for both record sources, so both are
+        # covered by one check. See #40 in the 2026-09 security audit.
+        escaped = None
+        if _escapes_target(moved_to, target_resolved):
+            escaped = str(moved_to)
+        elif _escapes_target(original, target_resolved):
+            escaped = str(original)
+        if escaped is not None:
+            results.append(
+                UndoRecord(
+                    src=str(original),
+                    dst=str(moved_to),
+                    status="rejected_outside_target",
+                    detail=f"record path resolves outside the run's target: {escaped}",
+                )
+            )
+            continue
 
         if not execute:
             results.append(UndoRecord(src=str(original), dst=str(moved_to), status="dry_run"))

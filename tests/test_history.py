@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from sorter import history
 from sorter.mover import TransactionRecord
 from tests.conftest import make_file
@@ -223,6 +225,120 @@ def test_completed_run_discards_its_journal(tmp_path: Path):
 
     assert not history.journal_path(history_dir, run_id).exists()
     assert history.list_runs(history_dir) == [run_id]
+
+
+# --- Path containment: a tampered ledger/journal must not escape target -----
+# See #40 in the 2026-09 security audit: undo_run trusted src/dst paths read
+# verbatim from ledger JSON with no check they stayed inside the run's target,
+# making `undo --execute` an arbitrary file-move primitive against a tampered
+# ledger. Covered against both the .json ledger and the .jsonl journal
+# fallback, since both feed undo_run through the same code path.
+
+
+def test_undo_rejects_record_outside_target_via_ledger(tmp_path: Path):
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = make_file(outside, "secret.txt", b"sensitive content")
+    exfil_dst = outside / "exfil" / "secret_moved.txt"  # need not exist yet
+
+    # A hand-crafted record: dst points at a real file entirely outside the
+    # run's target, src points at an arbitrary new location to exfiltrate it
+    # to. This is exactly the shape of ledger tampering the audit's PoC used.
+    records = [TransactionRecord(src=str(exfil_dst), dst=str(victim), status="moved")]
+    history_dir = downloads / ".sorter_history"
+    run_id = history.new_run_id()
+    history.save_ledger(history_dir, run_id, downloads, records)
+
+    results = history.undo_run(history_dir, run_id, execute=True)
+
+    assert results[0].status == "rejected_outside_target"
+    assert victim.exists()
+    assert victim.read_bytes() == b"sensitive content"
+    assert not exfil_dst.exists()
+
+
+def test_undo_rejects_record_outside_target_via_journal_fallback(tmp_path: Path):
+    """Same tampering, but reaching undo_run only through the crash-safety
+    journal (no completed .json ledger) — proves the fallback path is
+    covered by the same containment check, not just the normal ledger."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = make_file(outside, "secret.txt", b"sensitive content")
+    exfil_dst = outside / "exfil" / "secret_moved.txt"
+
+    history_dir = downloads / ".sorter_history"
+    run_id = history.new_run_id()
+    journal = history.start_journal(history_dir, run_id, downloads)
+    history.append_journal_record(
+        journal, TransactionRecord(src=str(exfil_dst), dst=str(victim), status="moved")
+    )
+    # Deliberately no save_ledger call: only the .jsonl exists, so
+    # load_ledger must fall back to load_journal to find this record at all.
+    assert not (history_dir / f"{run_id}.json").exists()
+
+    results = history.undo_run(history_dir, run_id, execute=True)
+
+    assert results[0].status == "rejected_outside_target"
+    assert victim.exists()
+    assert victim.read_bytes() == b"sensitive content"
+    assert not exfil_dst.exists()
+
+
+def test_undo_rejects_symlink_whose_real_target_escapes(tmp_path: Path):
+    """dst is a symlink living inside target, but it points somewhere else
+    entirely. resolve() follows the link, so this must be rejected too —
+    otherwise a tampered ledger could launder an escape through a symlink
+    planted inside target instead of a literal outside path."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real_secret = make_file(outside, "secret.txt", b"sensitive content")
+
+    dest_dir = downloads / "Images"
+    dest_dir.mkdir()
+    symlink_path = dest_dir / "photo.jpg"
+    try:
+        symlink_path.symlink_to(real_secret)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlinks in this environment: {exc}")
+
+    records = [TransactionRecord(src=str(downloads / "photo.jpg"), dst=str(symlink_path), status="moved")]
+    history_dir = downloads / ".sorter_history"
+    run_id = history.new_run_id()
+    history.save_ledger(history_dir, run_id, downloads, records)
+
+    results = history.undo_run(history_dir, run_id, execute=True)
+
+    assert results[0].status == "rejected_outside_target"
+    assert real_secret.exists()
+    assert real_secret.read_bytes() == b"sensitive content"
+
+
+def test_undo_still_restores_legitimate_record_after_containment_check(tmp_path: Path):
+    """Regression: the new containment check must not reject an ordinary,
+    untampered ledger — everything inside target still restores as before."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    dest_dir = downloads / "Documents"
+    dest_dir.mkdir()
+    moved_file = make_file(dest_dir, "report.pdf", b"contents")
+
+    records = [TransactionRecord(src=str(downloads / "report.pdf"), dst=str(moved_file), status="moved")]
+    history_dir = downloads / ".sorter_history"
+    run_id = history.new_run_id()
+    history.save_ledger(history_dir, run_id, downloads, records)
+
+    results = history.undo_run(history_dir, run_id, execute=True)
+
+    assert results[0].status == "restored"
+    assert (downloads / "report.pdf").exists()
+    assert (downloads / "report.pdf").read_bytes() == b"contents"
+    assert not moved_file.exists()
 
 
 def test_torn_final_line_recovers_earlier_records(tmp_path: Path):
