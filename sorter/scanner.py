@@ -38,6 +38,7 @@ def scan_directory(target: Path, ignore: IgnoreConfig, recursive: bool = False) 
     if not target.is_dir():
         raise NotADirectoryError(f"Target is not a directory: {target}")
 
+    target_resolved = target.resolve()
     iterator = target.rglob("*") if recursive else target.iterdir()
 
     entries: list[FileEntry] = []
@@ -48,8 +49,17 @@ def scan_directory(target: Path, ignore: IgnoreConfig, recursive: bool = False) 
             continue
         try:
             stat = path.stat()
+            resolved = path.resolve()
         except OSError:
             # File vanished or is locked/inaccessible mid-scan; skip it.
+            continue
+        # A directory junction/reparse point or symlink planted inside
+        # target can make an entry's *real* location fall outside it (only
+        # reachable via rglob, i.e. recursive=True, since iterdir doesn't
+        # descend into a junction to find files beneath it) — never bring an
+        # external file into the plan just because it's reachable through a
+        # link. See #41 in the 2026-09 security audit.
+        if resolved != target_resolved and target_resolved not in resolved.parents:
             continue
         entries.append(FileEntry(path=path, size=stat.st_size, mtime=stat.st_mtime))
 
