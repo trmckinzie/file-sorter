@@ -78,6 +78,26 @@ def test_scan_raises_for_missing_directory(tmp_path: Path):
         scan_directory(tmp_path / "nope", IgnoreConfig())
 
 
+def test_scan_recursive_never_ingests_nested_ledger_files(downloads: Path):
+    """See #42 in the 2026-09 security audit: _is_ignored only matched a
+    top-level entry literally named ".sorter_history", so a recursive scan
+    picked up its own <run_id>.json/.jsonl ledger files as ordinary files to
+    sort — silently corrupting undo history. This must never happen,
+    regardless of what the user's ignore.filenames config says."""
+    history_dir = downloads / ".sorter_history"
+    history_dir.mkdir()
+    make_file(history_dir, "20260101T000000000000.json")
+    make_file(history_dir, "20260101T000000000000.jsonl")
+    make_file(downloads, "top.pdf")
+
+    # Config with an empty ignore list: the ledger dir must still be
+    # excluded even though nothing in this config names it.
+    entries = scan_directory(downloads, IgnoreConfig(filenames=[]), recursive=True)
+    names = {e.path.name for e in entries}
+
+    assert names == {"top.pdf"}
+
+
 # --- Path containment: a junction inside target must not pull in outside ----
 # files during a recursive scan. See #41 in the 2026-09 security audit:
 # target.rglob("*") follows directory junctions/reparse points with no check

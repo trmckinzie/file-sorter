@@ -8,6 +8,11 @@ from pathlib import Path
 
 from sorter.config import IgnoreConfig
 
+# Must match sorter.history.LEDGER_DIRNAME. Duplicated as a literal rather
+# than imported: sorter.history imports from sorter.mover, which imports
+# FileEntry from this module, so importing history here would be circular.
+_LEDGER_DIRNAME = ".sorter_history"
+
 
 @dataclass(frozen=True)
 class FileEntry:
@@ -44,6 +49,12 @@ def scan_directory(target: Path, ignore: IgnoreConfig, recursive: bool = False) 
     entries: list[FileEntry] = []
     for path in iterator:
         if not path.is_file():
+            continue
+        # The ledger directory is an internal invariant, not a user-configurable
+        # ignore rule — it must never be scanned regardless of ignore.filenames,
+        # and (unlike that basename-only check) this catches it at any depth
+        # under a recursive scan. See #42 in the 2026-09 security audit.
+        if _LEDGER_DIRNAME in path.relative_to(target).parts:
             continue
         if _is_ignored(path, ignore):
             continue
