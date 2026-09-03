@@ -131,3 +131,109 @@ def test_undo_ignores_non_moved_records(tmp_path: Path):
 
     results = history.undo_run(history_dir, run_id, execute=True)
     assert results == []
+
+
+# --- Crash safety: an interrupted run must still be undoable -----------------
+
+
+def _crash_after(n: int, journal: Path):
+    """on_intent that journals n records, then raises as a hard stop would."""
+    seen = {"count": 0}
+
+    def _on_intent(record):
+        if seen["count"] >= n:
+            raise KeyboardInterrupt("simulated interruption mid-run")
+        history.append_journal_record(journal, record)
+        seen["count"] += 1
+
+    return _on_intent
+
+
+def test_interrupted_run_is_still_undoable(tmp_path: Path):
+    """The whole point of the journal: kill a run partway, undo still works."""
+    from sorter.mover import MoveOperation, execute_plan
+
+    target = tmp_path / "downloads"
+    target.mkdir()
+    srcs = [make_file(target, f"file{i}.txt", b"x") for i in range(5)]
+    plan = [MoveOperation(src=s, dst=target / "Documents" / s.name, category="Documents", matched_by="ext") for s in srcs]
+
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    journal = history.start_journal(history_dir, run_id, target)
+
+    # Interrupt after 3 files have been journalled.
+    try:
+        execute_plan(plan, execute=True, duplicate_check=False, on_intent=_crash_after(3, journal))
+    except KeyboardInterrupt:
+        pass
+
+    # No completed ledger was ever written.
+    assert not (history_dir / f"{run_id}.json").exists()
+
+    # But the run is still discoverable and loadable from its journal.
+    assert run_id in history.list_runs(history_dir)
+    ledger = history.load_ledger(history_dir, run_id)
+    assert len(ledger.records) == 3
+
+    # And the moved files actually go back where they came from.
+    results = history.undo_run(history_dir, run_id, execute=True)
+    assert [r.status for r in results] == ["restored"] * 3
+    for s in srcs[:3]:
+        assert s.exists(), f"{s.name} was not restored"
+
+
+def test_journal_records_intent_before_the_move(tmp_path: Path):
+    """A record must be durable before its move, never after."""
+    from sorter.mover import MoveOperation, execute_plan
+
+    target = tmp_path / "downloads"
+    target.mkdir()
+    src = make_file(target, "only.txt", b"x")
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    journal = history.start_journal(history_dir, run_id, target)
+
+    observed = {}
+
+    def _on_intent(record):
+        # At this instant the move has not happened yet.
+        observed["src_still_in_place"] = Path(record.src).exists()
+        history.append_journal_record(journal, record)
+        observed["journal_on_disk"] = journal.read_text(encoding="utf-8").count("\n") == 2
+
+    execute_plan(
+        [MoveOperation(src=src, dst=target / "Documents" / src.name, category="Documents", matched_by="ext")],
+        execute=True,
+        duplicate_check=False,
+        on_intent=_on_intent,
+    )
+
+    assert observed["src_still_in_place"] is True
+    assert observed["journal_on_disk"] is True
+
+
+def test_completed_run_discards_its_journal(tmp_path: Path):
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    history.start_journal(history_dir, run_id, tmp_path)
+    assert history.journal_path(history_dir, run_id).exists()
+
+    history.save_ledger(history_dir, run_id, tmp_path, [])
+
+    assert not history.journal_path(history_dir, run_id).exists()
+    assert history.list_runs(history_dir) == [run_id]
+
+
+def test_torn_final_line_recovers_earlier_records(tmp_path: Path):
+    """A crash mid-write leaves a partial line; earlier records must survive."""
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    journal = history.start_journal(history_dir, run_id, tmp_path)
+    history.append_journal_record(journal, TransactionRecord(src="a.txt", dst="D/a.txt", status="moved"))
+    with journal.open("a", encoding="utf-8") as fh:
+        fh.write('{"record": {"src": "b.txt", "ds')  # truncated
+
+    ledger = history.load_ledger(history_dir, run_id)
+    assert len(ledger.records) == 1
+    assert ledger.records[0]["src"] == "a.txt"

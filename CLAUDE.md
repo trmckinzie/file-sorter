@@ -36,9 +36,9 @@ same commands: `file-sorter organize ...`.
 .venv\Scripts\python.exe -m pytest
 ```
 
-52 tests cover config validation, rule/category resolution, scanning, move
-planning + collision handling, the undo ledger, and the CLI end-to-end
-(via `typer.testing.CliRunner`).
+56 tests cover config validation, rule/category resolution, scanning, move
+planning + collision handling, the undo ledger and its crash-safety journal,
+and the CLI end-to-end (via `typer.testing.CliRunner`).
 
 ## Architecture
 
@@ -48,7 +48,7 @@ planning + collision handling, the undo ledger, and the CLI end-to-end
 | [sorter/rules.py](sorter/rules.py) | `RuleEngine.categorize()` — extension lookup first, MIME-type sniffing as fallback, then `fallback_category`. Also resolves date-based subfolders. |
 | [sorter/scanner.py](sorter/scanner.py) | Walks the target directory (non-recursive by default), filtering out hidden files, junk filenames, and ignored extensions (`.crdownload`, `.part`, `.tmp`, etc). |
 | [sorter/mover.py](sorter/mover.py) | Turns scanned files + categorization into a `MoveOperation` plan, then executes it. Collision handling: identical content (SHA-256) is skipped as a duplicate; differing content is auto-renamed (`file (1).pdf`). Dry-run and execute share the same planning code path. |
-| [sorter/history.py](sorter/history.py) | Writes a JSON transaction ledger per run to `<target>/.sorter_history/`, and reverses a run (`undo_run`) by moving files back to their recorded source path. |
+| [sorter/history.py](sorter/history.py) | Writes a JSON transaction ledger per run to `<target>/.sorter_history/`, and reverses a run (`undo_run`) by moving files back to their recorded source path. Also owns the write-ahead journal that keeps an interrupted run undoable. |
 | [sorter/cli.py](sorter/cli.py) | Typer app wiring: `organize`, `undo`, `list-runs`, `init-config`. Renders `rich` tables for every preview/result. |
 
 ## Design decisions worth knowing
@@ -73,6 +73,15 @@ planning + collision handling, the undo ledger, and the CLI end-to-end
 - Individual file errors (permissions, locked files) are caught per-file
   during `execute_plan`/`undo_run` and recorded with `status="error"` — one
   bad file never aborts the whole run.
+- **The undo record is written ahead of the move, not after it.**
+  `start_journal()` opens a `<run_id>.jsonl` write-ahead log before the first
+  move and `execute_plan`'s `on_intent` hook appends each record (fsynced)
+  before the corresponding `shutil.move`. A completed run writes the real
+  `<run_id>.json` ledger and deletes the journal; an interrupted one leaves the
+  journal, which `load_ledger`/`list_runs` fall back to so `undo` still works.
+  The asymmetry is deliberate: a crash may leave a record for a move that never
+  happened (`undo_run` reports `skipped_missing`, harmless), but never a move
+  with no record.
 
 ## Extending
 
@@ -80,3 +89,9 @@ planning + collision handling, the undo ledger, and the CLI end-to-end
   for the schema) — no code changes needed.
 - New MIME-type fallback rules: `_MIME_MAJOR_TO_CATEGORY` / `_MIME_EXACT_TO_CATEGORY`
   in [sorter/rules.py](sorter/rules.py).
+
+## Model routing
+
+Sonnet executes, Opus escalates, Fable only on Travis's explicit say-so. This repo's subagents
+live in `.claude/agents/`; the doctrine they point to is `90_Meta/Model Routing.md` in the dev
+mono-vault containing this repo — personal workflow config, not part of this project.

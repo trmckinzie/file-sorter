@@ -11,7 +11,7 @@ import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from sorter.rules import Categorization, RuleEngine
 from sorter.scanner import FileEntry
@@ -94,11 +94,24 @@ def _auto_rename(dst: Path) -> Path:
     return candidate
 
 
-def execute_plan(plan: list[MoveOperation], execute: bool, duplicate_check: bool) -> list[TransactionRecord]:
+def execute_plan(
+    plan: list[MoveOperation],
+    execute: bool,
+    duplicate_check: bool,
+    on_intent: Optional[Callable[[TransactionRecord], None]] = None,
+) -> list[TransactionRecord]:
     """Carry out (or simulate, if execute=False) every move in `plan`.
 
     Errors on individual files (permissions, locked files, etc.) are caught
     and recorded rather than aborting the whole run.
+
+    `on_intent`, when given, is called with the record for a move immediately
+    *before* that move is attempted. It exists so a caller can persist a
+    write-ahead journal: the returned list only becomes durable once the whole
+    loop finishes, so without it an interrupted run leaves moved files with no
+    record of where they came from. An exception raised by `on_intent`
+    deliberately aborts the run — if the move cannot be recorded, it must not
+    happen.
     """
     records: list[TransactionRecord] = []
 
@@ -120,6 +133,8 @@ def execute_plan(plan: list[MoveOperation], execute: bool, duplicate_check: bool
             continue
 
         assert resolved_dst is not None
+        if on_intent is not None:
+            on_intent(TransactionRecord(src=str(op.src), dst=str(resolved_dst), status="moved"))
         try:
             resolved_dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(op.src), str(resolved_dst))

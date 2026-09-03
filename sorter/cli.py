@@ -80,13 +80,25 @@ def organize(
         console.print(f"Found {len(entries)} file(s), but none matched a category (and no fallback is configured).")
         raise typer.Exit(code=0)
 
-    records = execute_plan(plan, execute=execute, duplicate_check=cfg.duplicate_check)
+    # Open the journal before the first move, not after the last one: a run
+    # interrupted partway is exactly when the undo record matters, and a ledger
+    # written only at the end would not exist yet.
+    resolved_history_dir = None
+    run_id = None
+    on_intent = None
+    if execute:
+        resolved_history_dir = history_dir or history.default_history_dir(target)
+        run_id = history.new_run_id()
+        journal = history.start_journal(resolved_history_dir, run_id, target)
+        on_intent = lambda record: history.append_journal_record(journal, record)  # noqa: E731
+
+    records = execute_plan(
+        plan, execute=execute, duplicate_check=cfg.duplicate_check, on_intent=on_intent
+    )
 
     _render_table(records, execute=execute)
 
     if execute:
-        resolved_history_dir = history_dir or history.default_history_dir(target)
-        run_id = history.new_run_id()
         ledger_path = history.save_ledger(resolved_history_dir, run_id, target, records)
         moved = sum(1 for r in records if r.status == "moved")
         console.print(f"\n[bold green]{moved}[/bold green] file(s) moved. Ledger written to [bold]{ledger_path}[/bold].")
