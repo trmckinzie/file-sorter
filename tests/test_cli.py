@@ -83,6 +83,26 @@ def test_undo_with_no_runs_errors(downloads: Path):
     assert result.exit_code == 1
 
 
+def test_undo_warns_when_journal_had_dropped_records(downloads: Path):
+    """See #43 in the 2026-09 security audit: undo must surface a warning
+    when the run it's restoring was recovered from a journal that lost a
+    record, instead of silently reporting partial coverage as complete."""
+    from sorter import history
+    from sorter.mover import TransactionRecord
+
+    run_id = history.new_run_id()
+    history_dir = downloads / ".sorter_history"
+    journal = history.start_journal(history_dir, run_id, downloads)
+    history.append_journal_record(journal, TransactionRecord(src="a.txt", dst="D/a.txt", status="moved"))
+    with journal.open("a", encoding="utf-8") as fh:
+        fh.write('{"record": {"src": "corrupted", "ds\n')
+
+    result = runner.invoke(app, ["undo", "--target", str(downloads), run_id])
+
+    assert "Warning" in result.stderr
+    assert "1 journal record" in result.stderr
+
+
 def test_list_runs_cli(downloads: Path):
     make_file(downloads, "photo.jpg")
     runner.invoke(app, ["organize", str(downloads), "--execute"])

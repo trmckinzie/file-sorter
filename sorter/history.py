@@ -23,6 +23,11 @@ class Ledger:
     target: str
     created_at: str
     records: list[dict] = field(default_factory=list)
+    # How many journal lines failed to parse and were silently dropped when
+    # this Ledger was recovered from a .jsonl journal (0 for a normal .json
+    # ledger, which has no such lines). Defaults to 0 so existing saved
+    # ledgers without this field still load fine via Ledger(**raw).
+    dropped_records: int = 0
 
 
 def default_history_dir(target: Path) -> Path:
@@ -87,6 +92,7 @@ def load_journal(history_dir: Path, run_id: str) -> Optional[Ledger]:
 
     header: dict = {}
     records: list[dict] = []
+    dropped = 0
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -94,8 +100,13 @@ def load_journal(history_dir: Path, run_id: str) -> Optional[Ledger]:
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
-            # A torn final line from a crash mid-write. Every earlier line is
-            # still complete, so recover what we can rather than losing the run.
+            # Not just a torn final line from a crash mid-write — any line
+            # anywhere in the file can fail to parse. Every other line is
+            # still complete, so recover what we can rather than losing the
+            # whole run, but count what was lost so the caller can warn
+            # instead of silently reporting incomplete undo coverage as
+            # if it were the whole story.
+            dropped += 1
             continue
         if "header" in payload:
             header = payload["header"]
@@ -107,6 +118,7 @@ def load_journal(history_dir: Path, run_id: str) -> Optional[Ledger]:
         target=header.get("target", ""),
         created_at=header.get("created_at", ""),
         records=records,
+        dropped_records=dropped,
     )
 
 

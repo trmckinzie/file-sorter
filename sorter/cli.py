@@ -146,6 +146,19 @@ def undo(
         raise typer.Exit(code=1)
 
     try:
+        ledger = history.load_ledger(resolved_history_dir, resolved_run_id)
+    except FileNotFoundError as exc:
+        error_console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    if ledger.dropped_records:
+        error_console.print(
+            f"[yellow]Warning:[/yellow] {ledger.dropped_records} journal record(s) for run "
+            f"[bold]{resolved_run_id}[/bold] were corrupted and could not be recovered — "
+            "undo coverage for this run may be incomplete."
+        )
+
+    try:
         results = history.undo_run(resolved_history_dir, resolved_run_id, execute=execute)
     except FileNotFoundError as exc:
         error_console.print(str(exc))

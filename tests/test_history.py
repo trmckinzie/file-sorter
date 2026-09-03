@@ -353,3 +353,31 @@ def test_torn_final_line_recovers_earlier_records(tmp_path: Path):
     ledger = history.load_ledger(history_dir, run_id)
     assert len(ledger.records) == 1
     assert ledger.records[0]["src"] == "a.txt"
+
+
+def test_journal_reports_count_of_dropped_records(tmp_path: Path):
+    """See #43 in the 2026-09 security audit: a corrupted line anywhere in
+    the journal (not just a torn trailing one) was silently dropped with no
+    signal. load_journal must now surface how many lines it lost."""
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    journal = history.start_journal(history_dir, run_id, tmp_path)
+    history.append_journal_record(journal, TransactionRecord(src="a.txt", dst="D/a.txt", status="moved"))
+    with journal.open("a", encoding="utf-8") as fh:
+        fh.write('{"record": {"src": "corrupted", "ds\n')  # a corrupted middle line
+    history.append_journal_record(journal, TransactionRecord(src="b.txt", dst="D/b.txt", status="moved"))
+
+    ledger = history.load_ledger(history_dir, run_id)
+    assert len(ledger.records) == 2
+    assert ledger.dropped_records == 1
+
+
+def test_ledger_from_completed_run_has_zero_dropped_records(tmp_path: Path):
+    """Regression: a normal .json ledger (no journal lines involved) must
+    report dropped_records == 0, not fail to load."""
+    history_dir = tmp_path / "hist"
+    run_id = history.new_run_id()
+    history.save_ledger(history_dir, run_id, tmp_path, [TransactionRecord(src="a", dst="b", status="moved")])
+
+    ledger = history.load_ledger(history_dir, run_id)
+    assert ledger.dropped_records == 0
