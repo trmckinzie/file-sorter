@@ -103,6 +103,56 @@ def test_undo_warns_when_journal_had_dropped_records(downloads: Path):
     assert "1 journal record" in result.stderr
 
 
+def test_organize_rejects_unsafe_category_in_config(downloads: Path, tmp_path: Path):
+    """A category that escapes the target must stop the run with a clear
+    config error, exit non-zero, and move nothing."""
+    config_path = tmp_path / "evil.yaml"
+    config_path.write_text(
+        'categories:\n  "C:\\\\Windows\\\\System32":\n    extensions: [".jpg"]\nfallback_category: null\n',
+        encoding="utf-8",
+    )
+    src = make_file(downloads, "photo.jpg", b"private bytes")
+
+    result = runner.invoke(app, ["organize", str(downloads), "--execute", "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "Unsafe destination in config" in result.stderr
+    assert src.exists() and src.read_bytes() == b"private bytes"
+    assert not (downloads / ".sorter_history").exists()
+
+
+def test_organize_reports_rejected_destination_in_the_table(downloads: Path, tmp_path: Path, monkeypatch):
+    """A rejection that reaches execute_plan must be *displayed*, not
+    swallowed — including in a dry run, where every row used to be flattened
+    to 'would move' regardless of status."""
+    from sorter import cli as cli_module
+    from sorter.mover import MoveOperation
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    src = make_file(downloads, "photo.jpg", b"private bytes")
+
+    real_build_plan = cli_module.build_plan
+    monkeypatch.setattr(
+        cli_module,
+        "build_plan",
+        lambda *a, **k: [
+            MoveOperation(src=src, dst=outside / "photo.jpg", category="Images", matched_by="extension")
+        ],
+    )
+    assert real_build_plan is not cli_module.build_plan
+
+    result = runner.invoke(app, ["organize", str(downloads)])
+
+    assert result.exit_code == 0
+    assert "rejected_outside_target" in result.stdout
+    assert "would move" not in result.stdout
+    assert "0 file(s) would be moved" in result.stdout
+    assert "REJECTED" in result.stderr
+    assert src.exists()
+    assert not (outside / "photo.jpg").exists()
+
+
 def test_list_runs_cli(downloads: Path):
     make_file(downloads, "photo.jpg")
     runner.invoke(app, ["organize", str(downloads), "--execute"])

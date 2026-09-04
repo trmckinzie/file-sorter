@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from sorter.paths import escapes_target
+from sorter.paths import ensure_safe_relative, escapes_target
 from sorter.rules import Categorization, RuleEngine
 from sorter.scanner import FileEntry
 
@@ -37,12 +37,34 @@ class TransactionRecord:
 def build_plan(entries: list[FileEntry], rule_engine: RuleEngine, target: Path) -> list[MoveOperation]:
     """Resolve a category (and optional date subfolder) for every scanned
     file. Files with no matching category (and no fallback configured) are
-    left out of the plan entirely."""
+    left out of the plan entirely.
+
+    Raises `UnsafeDestinationError` if a configured category or the rendered
+    date subfolder is anything but a plain relative folder name. That is a
+    config bug (or an attack), and it is the same for every file, so it
+    fails here — loudly, once, before any plan exists — rather than
+    producing a plan whose every entry `execute_plan` would reject one by
+    one. `execute_plan` still re-checks the real resolved destination; this
+    is the early, legible half of that pair, not a replacement for it.
+    """
     plan: list[MoveOperation] = []
+    checked: set[tuple[str, Optional[str]]] = set()
     for entry in entries:
         result: Categorization = rule_engine.categorize(entry.path)
         if result.category is None:
             continue
+
+        # Categories repeat across files; validate each distinct pairing once.
+        key = (result.category, result.subfolder)
+        if key not in checked:
+            ensure_safe_relative(
+                result.category, "category name (from 'categories'/'fallback_category' in config)"
+            )
+            if result.subfolder:
+                ensure_safe_relative(
+                    result.subfolder, "date subfolder (rendered from 'date_routing.format' in config)"
+                )
+            checked.add(key)
 
         dest_dir = target / result.category
         if result.subfolder:

@@ -6,6 +6,7 @@ import pytest
 
 from sorter.config import SorterConfig
 from sorter.mover import MoveOperation, build_plan, execute_plan
+from sorter.paths import UnsafeDestinationError
 from sorter.rules import RuleEngine
 from sorter.scanner import scan_directory
 from tests.conftest import make_file
@@ -268,3 +269,64 @@ def test_normal_nested_category_still_moves(downloads: Path):
     assert records[0].status == "moved"
     assert dst.exists() and dst.read_bytes() == b"contents"
     assert not src.exists()
+
+
+# --- Path containment, layer 1: bad config fails at plan time --------------
+# execute_plan's check is the backstop. A category that escapes is the same
+# for every file in the run, so catching it once while the plan is built
+# gives the user one clear message about their config instead of a table of
+# N identical rejections.
+
+
+@pytest.mark.parametrize("category", ESCAPING_CATEGORIES)
+def test_build_plan_rejects_unsafe_category(downloads: Path, category: str):
+    cfg = SorterConfig.model_validate(
+        {"categories": {category: {"extensions": [".jpg"]}}, "fallback_category": None}
+    )
+    src = make_file(downloads, "photo.jpg", b"private bytes")
+
+    with pytest.raises(UnsafeDestinationError) as excinfo:
+        _plan_for(downloads, cfg)
+
+    assert "category name" in str(excinfo.value)
+    assert src.exists()
+
+
+def test_build_plan_rejects_traversal_from_date_routing_format(downloads: Path):
+    """The real `date_routing.format` route: strftime passes `../..` through
+    untouched, so the rendered subfolder traverses up out of the target."""
+    cfg = SorterConfig.model_validate(
+        {
+            "categories": {"Documents": {"extensions": [".pdf"]}},
+            "date_routing": {"enabled": True, "format": "../../%Y"},
+        }
+    )
+    src = make_file(downloads, "report.pdf", b"private bytes")
+
+    with pytest.raises(UnsafeDestinationError) as excinfo:
+        _plan_for(downloads, cfg)
+
+    assert "date subfolder" in str(excinfo.value)
+    assert "'date_routing.format'" in str(excinfo.value)
+    assert src.exists()
+    assert not (downloads.parent.parent / "report.pdf").exists()
+
+
+def test_build_plan_allows_a_normal_nested_category_and_date_subfolder(downloads: Path):
+    """Regression: nested names are legitimate and must keep working — only
+    absolute/UNC/device/drive-relative names and `..` segments are refused."""
+    cfg = SorterConfig.model_validate(
+        {
+            "categories": {"Work/Invoices": {"extensions": [".pdf"]}},
+            "date_routing": {"enabled": True, "format": "%Y/%m"},
+        }
+    )
+    make_file(downloads, "report.pdf", b"contents")
+
+    plan = _plan_for(downloads, cfg)
+    records = execute_plan(plan, execute=True, duplicate_check=True, target=downloads)
+
+    assert records[0].status == "moved"
+    moved = list((downloads / "Work" / "Invoices").rglob("report.pdf"))
+    assert len(moved) == 1
+    assert moved[0].read_bytes() == b"contents"

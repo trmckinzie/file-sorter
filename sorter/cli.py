@@ -12,6 +12,7 @@ from rich.table import Table
 from sorter import history
 from sorter.config import load_config
 from sorter.mover import build_plan, execute_plan
+from sorter.paths import UnsafeDestinationError
 from sorter.rules import RuleEngine
 from sorter.scanner import scan_directory
 
@@ -78,7 +79,13 @@ def organize(
         raise typer.Exit(code=0)
 
     rule_engine = RuleEngine(cfg)
-    plan = build_plan(entries, rule_engine, target)
+    try:
+        plan = build_plan(entries, rule_engine, target)
+    except UnsafeDestinationError as exc:
+        # Bad config, not a bad file: nothing was touched and nothing will be
+        # until it's corrected, so say so once and stop.
+        error_console.print(f"Unsafe destination in config: {exc}")
+        raise typer.Exit(code=1)
 
     if not plan:
         console.print(f"Found {len(entries)} file(s), but none matched a category (and no fallback is configured).")
