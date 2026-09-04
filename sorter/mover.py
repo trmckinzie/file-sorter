@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from sorter.paths import escapes_target
 from sorter.rules import Categorization, RuleEngine
 from sorter.scanner import FileEntry
 
@@ -29,7 +30,7 @@ class MoveOperation:
 class TransactionRecord:
     src: str
     dst: str
-    status: str  # "moved", "skipped_duplicate", "error", "dry_run"
+    status: str  # "moved", "skipped_duplicate", "rejected_outside_target", "error", "dry_run"
     detail: Optional[str] = None
 
 
@@ -98,12 +99,19 @@ def execute_plan(
     plan: list[MoveOperation],
     execute: bool,
     duplicate_check: bool,
+    target: Path,
     on_intent: Optional[Callable[[TransactionRecord], None]] = None,
 ) -> list[TransactionRecord]:
     """Carry out (or simulate, if execute=False) every move in `plan`.
 
     Errors on individual files (permissions, locked files, etc.) are caught
     and recorded rather than aborting the whole run.
+
+    Every operation is checked against `target` before anything on disk is
+    read, hashed, created or moved: this is the one place the user's files
+    are relocated in bulk, so it is the one place that must not take a
+    destination on trust. `target` has no default on purpose — a containment
+    check that can be skipped by omitting an argument is not a check.
 
     `on_intent`, when given, is called with the record for a move immediately
     *before* that move is attempted. It exists so a caller can persist a
@@ -114,8 +122,36 @@ def execute_plan(
     happen.
     """
     records: list[TransactionRecord] = []
+    target_resolved = target.resolve()
 
     for op in plan:
+        # Containment first, ahead of the dry-run branch and ahead of every
+        # filesystem call below — `_resolve_collision` alone would stat and
+        # SHA-256 a file at the destination, and doing that outside `target`
+        # is already a leak even if no move follows. A dry run has to show
+        # the rejection too: the preview is what the user decides on, so a
+        # destination the real run would refuse must not preview as a move.
+        #
+        # Rejected, never clamped. A destination outside the target means the
+        # config or the plan is wrong (or hostile); quietly rewriting it to
+        # something inside would move the file somewhere nobody asked for and
+        # hide the cause.
+        escaped = None
+        if escapes_target(op.dst, target_resolved):
+            escaped = op.dst
+        elif escapes_target(op.src, target_resolved):
+            escaped = op.src
+        if escaped is not None:
+            records.append(
+                TransactionRecord(
+                    src=str(op.src),
+                    dst=str(op.dst),
+                    status="rejected_outside_target",
+                    detail=f"resolves outside the target directory {target_resolved}: {escaped}",
+                )
+            )
+            continue
+
         if not execute:
             records.append(TransactionRecord(src=str(op.src), dst=str(op.dst), status="dry_run"))
             continue

@@ -33,6 +33,10 @@ _STATUS_STYLE = {
     "restored": "green",
     "skipped_missing": "cyan",
     "skipped_conflict": "cyan",
+    # Emitted by both execute_plan and undo_run. Without an entry here it
+    # would render in the default white and read like a routine skip — the
+    # one status that must not be easy to scroll past.
+    "rejected_outside_target": "bold red",
 }
 
 
@@ -93,10 +97,18 @@ def organize(
         on_intent = lambda record: history.append_journal_record(journal, record)  # noqa: E731
 
     records = execute_plan(
-        plan, execute=execute, duplicate_check=cfg.duplicate_check, on_intent=on_intent
+        plan, execute=execute, duplicate_check=cfg.duplicate_check, target=target, on_intent=on_intent
     )
 
     _render_table(records, execute=execute)
+
+    rejected = sum(1 for r in records if r.status == "rejected_outside_target")
+    if rejected:
+        error_console.print(
+            f"\n{rejected} file(s) were REJECTED: their destination resolved outside {target}. "
+            "Nothing was moved for those files. Check the category names and "
+            "'date_routing.format' in your config."
+        )
 
     if execute:
         ledger_path = history.save_ledger(resolved_history_dir, run_id, target, records)
@@ -104,7 +116,10 @@ def organize(
         console.print(f"\n[bold green]{moved}[/bold green] file(s) moved. Ledger written to [bold]{ledger_path}[/bold].")
         console.print(f"Run ID: [bold]{run_id}[/bold] (use 'file-sorter undo {run_id}' to reverse this run)")
     else:
-        console.print(f"\n[yellow]Dry run[/yellow] — {len(plan)} file(s) would be moved. Re-run with --execute to apply.")
+        # Count the records, not the plan: a rejected entry is in the plan but
+        # would not be moved, so reporting len(plan) would overstate the run.
+        would_move = sum(1 for r in records if r.status == "dry_run")
+        console.print(f"\n[yellow]Dry run[/yellow] — {would_move} file(s) would be moved. Re-run with --execute to apply.")
 
 
 def _render_table(records, execute: bool) -> None:
@@ -112,16 +127,18 @@ def _render_table(records, execute: bool) -> None:
     table.add_column("Source", overflow="fold")
     table.add_column("Destination", overflow="fold")
     table.add_column("Status")
-    if not execute:
-        # In dry-run mode every record is "dry_run"; render status as
-        # "would move" for clarity instead of the raw internal name.
-        for record in records:
+    for record in records:
+        if not execute and record.status == "dry_run":
+            # Render the ordinary dry-run status as "would move" for clarity
+            # instead of the raw internal name.
             table.add_row(record.src, record.dst, "[yellow]would move[/yellow]")
-    else:
-        for record in records:
-            style = _STATUS_STYLE.get(record.status, "white")
-            status_text = record.status if not record.detail else f"{record.status} ({record.detail})"
-            table.add_row(record.src, record.dst, f"[{style}]{status_text}[/{style}]")
+            continue
+        # Anything else keeps its real status, in a dry run too: a rejected
+        # destination is exactly what the preview exists to show, and the old
+        # blanket "would move" for every dry-run row would have hidden it.
+        style = _STATUS_STYLE.get(record.status, "white")
+        status_text = record.status if not record.detail else f"{record.status} ({record.detail})"
+        table.add_row(record.src, record.dst, f"[{style}]{status_text}[/{style}]")
     console.print(table)
 
 

@@ -166,7 +166,7 @@ def test_interrupted_run_is_still_undoable(tmp_path: Path):
 
     # Interrupt after 3 files have been journalled.
     try:
-        execute_plan(plan, execute=True, duplicate_check=False, on_intent=_crash_after(3, journal))
+        execute_plan(plan, execute=True, duplicate_check=False, target=target, on_intent=_crash_after(3, journal))
     except KeyboardInterrupt:
         pass
 
@@ -208,6 +208,7 @@ def test_journal_records_intent_before_the_move(tmp_path: Path):
         [MoveOperation(src=src, dst=target / "Documents" / src.name, category="Documents", matched_by="ext")],
         execute=True,
         duplicate_check=False,
+        target=target,
         on_intent=_on_intent,
     )
 
