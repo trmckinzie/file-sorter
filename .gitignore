@@ -6,3 +6,13 @@ __pycache__/
 .coverage
 htmlcov/
 .sorter_history/
+
+# Environment files. Had no coverage here before an empirical gitignore audit;
+# .env.example stays trackable as the documented template.
+.env
+.env.*
+!.env.example
+
+# Per-machine Claude Code settings. Was matched only by a machine-global ignore
+# file, which does not travel to a fresh clone or to the MacBook.
+.claude/settings.local.json
