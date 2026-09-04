@@ -7,10 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sorter.config import IgnoreConfig
+from sorter.paths import is_inside
 
 # Must match sorter.history.LEDGER_DIRNAME. Duplicated as a literal rather
 # than imported: sorter.history imports from sorter.mover, which imports
 # FileEntry from this module, so importing history here would be circular.
+# (The containment check above has no such problem — sorter.paths imports
+# nothing from sorter, precisely so all three modules can share one copy.)
 _LEDGER_DIRNAME = ".sorter_history"
 
 
@@ -70,7 +73,7 @@ def scan_directory(target: Path, ignore: IgnoreConfig, recursive: bool = False) 
         # descend into a junction to find files beneath it) — never bring an
         # external file into the plan just because it's reachable through a
         # link. See #41 in the 2026-09 security audit.
-        if resolved != target_resolved and target_resolved not in resolved.parents:
+        if not is_inside(resolved, target_resolved):
             continue
         entries.append(FileEntry(path=path, size=stat.st_size, mtime=stat.st_mtime))
 
