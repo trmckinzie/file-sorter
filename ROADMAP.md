@@ -17,4 +17,4 @@ Tier: code. See `90_Meta/Dev Environment Standard.md` in the dev vault.
 - [x] Audit #44 (fsync after every journal line) closed won't-fix 2026-10-09: the tool is used on local SSD only, and per-line fsync keeps the undo ledger crash-safe
 
 ## Reach done
-- [ ] Commit and push the standardization, then see CI green on all three Pythons #next
+- [x] Committed and pushed as `20e17d4`; CI green on 3.12/3.13/3.14 on 2026-10-09. **Done line met.**
