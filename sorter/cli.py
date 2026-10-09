@@ -206,7 +206,7 @@ def undo(
         restored = sum(1 for r in results if r.status == "restored")
         console.print(f"\n[bold green]{restored}[/bold green] file(s) restored for run [bold]{resolved_run_id}[/bold].")
     else:
-        console.print(f"\n[yellow]Dry run[/yellow] — re-run with --execute to actually restore these files.")
+        console.print("\n[yellow]Dry run[/yellow] — re-run with --execute to actually restore these files.")
 
 
 @app.command("list-runs")

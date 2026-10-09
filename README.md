@@ -9,15 +9,16 @@ See [CLAUDE.md](CLAUDE.md) for architecture, setup, and usage details.
 ## Quick start
 
 ```bash
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+uv venv --python 3.14
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv pip install --python .venv/bin/python --no-deps -e .
 
 # Preview (default, no files touched)
-.venv\Scripts\python.exe -m sorter.cli organize ~/Downloads
+.venv/bin/python -m sorter.cli organize ~/Downloads
 
 # Apply
-.venv\Scripts\python.exe -m sorter.cli organize ~/Downloads --execute
+.venv/bin/python -m sorter.cli organize ~/Downloads --execute
 
 # Undo the last run
-.venv\Scripts\python.exe -m sorter.cli undo --target ~/Downloads --execute
+.venv/bin/python -m sorter.cli undo --target ~/Downloads --execute
 ```

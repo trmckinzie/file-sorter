@@ -5,26 +5,36 @@ into category folders, built with `typer`, `pydantic`, and `rich`.
 
 ## Setup
 
+Runtime is pinned via `.python-version` (uv reads it); dependencies are locked
+in `requirements-dev.txt`, hash-pinned and compiled from `pyproject.toml`.
+
 ```bash
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+uv venv --python 3.14
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv pip install --python .venv/bin/python --no-deps -e .
+```
+
+To recompile the lock after changing `pyproject.toml` dependencies:
+
+```bash
+uv pip compile pyproject.toml --extra dev --universal --generate-hashes --python-version 3.12 -o requirements-dev.txt
 ```
 
 ## Running
 
 ```bash
 # Preview only — the default. Nothing is moved.
-.venv\Scripts\python.exe -m sorter.cli organize C:\Users\me\Downloads
+.venv/bin/python -m sorter.cli organize ~/Downloads
 
 # Actually move files.
-.venv\Scripts\python.exe -m sorter.cli organize C:\Users\me\Downloads --execute
+.venv/bin/python -m sorter.cli organize ~/Downloads --execute
 
 # Reverse the most recent run.
-.venv\Scripts\python.exe -m sorter.cli undo --target C:\Users\me\Downloads --execute
+.venv/bin/python -m sorter.cli undo --target ~/Downloads --execute
 
 # List past runs, generate a custom config.
-.venv\Scripts\python.exe -m sorter.cli list-runs --target C:\Users\me\Downloads
-.venv\Scripts\python.exe -m sorter.cli init-config my_config.yaml
+.venv/bin/python -m sorter.cli list-runs --target ~/Downloads
+.venv/bin/python -m sorter.cli init-config my_config.yaml
 ```
 
 Once installed (`pip install -e .`), the `file-sorter` console script wraps the
@@ -33,14 +43,17 @@ same commands: `file-sorter organize ...`.
 ## Testing
 
 ```bash
-.venv\Scripts\python.exe -m pytest
+.venv/bin/python -m pytest
 ```
+
+Or run the full local check suite (ruff + pytest) with `bash verify.sh`.
 
 89 tests cover config validation, rule/category resolution, scanning, move
 planning + collision handling, target containment on both the move and undo
 paths, the undo ledger and its crash-safety journal, and the CLI end-to-end
 (via `typer.testing.CliRunner`). One symlink test skips where the account
-lacks `SeCreateSymbolicLinkPrivilege`, which is the normal Windows case.
+lacks the privilege to create symlinks, which is the normal case for an
+unprivileged account.
 
 ## Architecture
 
@@ -109,6 +122,10 @@ lacks `SeCreateSymbolicLinkPrivilege`, which is the normal Windows case.
   The asymmetry is deliberate: a crash may leave a record for a move that never
   happened (`undo_run` reports `skipped_missing`, harmless), but never a move
   with no record.
+- **Audit item #44 (fsync after every journal line in `sorter/history.py`)
+  was closed won't-fix on 2026-10-09.** The tool is used on local SSD only,
+  where the fsync costs roughly 1–10 ms per file, and per-line fsync is what
+  keeps the undo ledger crash-safe — see the point above.
 
 ## Extending
 

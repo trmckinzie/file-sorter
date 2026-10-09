@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -134,15 +135,30 @@ def _op(src: Path, dst: Path, category: str) -> MoveOperation:
     return MoveOperation(src=src, dst=dst, category=category, matched_by="extension")
 
 
+# The Windows-syntax cases only escape on Windows: on macOS/Linux a backslash
+# is an ordinary filename character, so `..\..\Windows` is one oddly named
+# folder *inside* the target and the move is correctly allowed. They are
+# skipped off Windows rather than deleted, and the POSIX cases below test the
+# same guard on the platforms this repo now runs on (and CI uses).
+# Decided 2026-10-09 in the portfolio review, after probing the mover with
+# `../../x`, `sub/../../x` and an absolute path on macOS: all rejected.
+WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows path syntax; not an escape on POSIX")
+
 ESCAPING_CATEGORIES = [
-    pytest.param(r"C:\Windows\System32", id="absolute-windows"),
-    pytest.param(r"\\host\share", id="unc"),
-    pytest.param(r"\\evilhost\exfil", id="unc-exfil"),
-    pytest.param(r"\\?\C:\Windows", id="device-path"),
-    pytest.param("D:evil", id="drive-relative-other-drive"),
-    pytest.param(r"..\..\Windows", id="parent-traversal"),
+    pytest.param(r"C:\Windows\System32", id="absolute-windows", marks=WINDOWS_ONLY),
+    pytest.param(r"\\host\share", id="unc", marks=WINDOWS_ONLY),
+    pytest.param(r"\\evilhost\exfil", id="unc-exfil", marks=WINDOWS_ONLY),
+    pytest.param(r"\\?\C:\Windows", id="device-path", marks=WINDOWS_ONLY),
+    pytest.param("D:evil", id="drive-relative-other-drive", marks=WINDOWS_ONLY),
+    pytest.param(r"..\..\Windows", id="parent-traversal", marks=WINDOWS_ONLY),
     pytest.param("/Windows", id="root-relative"),
+    pytest.param("../../escape", id="posix-parent-traversal"),
+    pytest.param("sub/../../escape", id="posix-nested-traversal"),
 ]
+
+# build_plan validates the category *string*, so it rejects every one of these
+# on every OS; it gets the full list with no platform skips.
+UNSAFE_CATEGORY_STRINGS = [pytest.param(*p.values, id=p.id) for p in ESCAPING_CATEGORIES]
 
 
 @pytest.mark.parametrize("category", ESCAPING_CATEGORIES)
@@ -183,6 +199,7 @@ def test_execute_plan_rejects_traversal_from_date_routing_format(downloads: Path
     assert list(outside.iterdir()) == []
 
 
+@WINDOWS_ONLY
 def test_execute_plan_rejects_drive_relative_destination(downloads: Path):
     """`D:evil` keeps its drive letter through the join, so the move would
     land on whatever D:'s current directory happens to be."""
@@ -218,14 +235,18 @@ def test_execute_plan_rejects_source_outside_target(downloads: Path, tmp_path: P
     assert not (downloads / "Documents" / "secret.txt").exists()
 
 
-def test_dry_run_also_reports_rejection_instead_of_previewing_a_move(downloads: Path):
+@pytest.mark.parametrize(
+    "category",
+    [pytest.param(r"C:\Windows\System32", id="windows", marks=WINDOWS_ONLY), pytest.param("../../escape", id="posix")],
+)
+def test_dry_run_also_reports_rejection_instead_of_previewing_a_move(downloads: Path, category: str):
     """A dry run is what the user decides on. A destination the real run
     would refuse must not preview as an ordinary move."""
     src = make_file(downloads, "photo.jpg")
-    dst = downloads / r"C:\Windows\System32" / "photo.jpg"
+    dst = downloads / category / "photo.jpg"
 
     records = execute_plan(
-        [_op(src, dst, r"C:\Windows\System32")], execute=False, duplicate_check=True, target=downloads
+        [_op(src, dst, category)], execute=False, duplicate_check=True, target=downloads
     )
 
     assert records[0].status == "rejected_outside_target"
@@ -278,7 +299,7 @@ def test_normal_nested_category_still_moves(downloads: Path):
 # N identical rejections.
 
 
-@pytest.mark.parametrize("category", ESCAPING_CATEGORIES)
+@pytest.mark.parametrize("category", UNSAFE_CATEGORY_STRINGS)
 def test_build_plan_rejects_unsafe_category(downloads: Path, category: str):
     cfg = SorterConfig.model_validate(
         {"categories": {category: {"extensions": [".jpg"]}}, "fallback_category": None}
