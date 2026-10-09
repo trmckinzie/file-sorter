@@ -48,12 +48,13 @@ same commands: `file-sorter organize ...`.
 
 Or run the full local check suite (ruff + pytest) with `bash verify.sh`.
 
-89 tests cover config validation, rule/category resolution, scanning, move
+95 tests cover config validation, rule/category resolution, scanning, move
 planning + collision handling, target containment on both the move and undo
 paths, the undo ledger and its crash-safety journal, and the CLI end-to-end
-(via `typer.testing.CliRunner`). One symlink test skips where the account
-lacks the privilege to create symlinks, which is the normal case for an
-unprivileged account.
+(via `typer.testing.CliRunner`). On macOS and in CI, 85 run and 10 skip: eight
+containment cases written in Windows path syntax (on POSIX a backslash is an
+ordinary filename character, so they are not escapes there; POSIX escape
+cases run in their place) and two tests that need Windows junctions.
 
 ## Architecture
 
